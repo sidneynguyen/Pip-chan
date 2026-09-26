@@ -15,13 +15,20 @@ const image = document.querySelector<HTMLImageElement>("#pip-image")!;
 const bubble = document.querySelector<HTMLElement>("#bubble")!;
 const copy = document.querySelector<HTMLElement>("#bubble-copy")!;
 const dismiss = document.querySelector<HTMLButtonElement>("#dismiss")!;
-const hint = document.querySelector<HTMLElement>("#hint")!;
+const ghostToggle = document.querySelector<HTMLButtonElement>("#ghost-toggle")!;
+const hidePip = document.querySelector<HTMLButtonElement>("#hide-pip")!;
 
 const imageByStatus: Record<PipStatus, string> = {
   idle: new URL("./assets/pip-idle.png", import.meta.url).href,
   thinking: new URL("./assets/pip-thinking.png", import.meta.url).href,
   ready: new URL("./assets/pip-ready.png", import.meta.url).href,
 };
+
+const thinkingImages = [
+  imageByStatus.thinking,
+  new URL("./assets/pip-thinking2.png", import.meta.url).href,
+  new URL("./assets/pip-thinking3.png", import.meta.url).href,
+];
 
 const altByStatus: Record<PipStatus, string> = {
   idle: "Pip-chan is idle",
@@ -30,6 +37,18 @@ const altByStatus: Record<PipStatus, string> = {
 };
 
 let timeout: number | undefined;
+let thinkingInterval: number | undefined;
+let thinkingImageIndex = 0;
+
+function setGhostMode(enabled: boolean) {
+  pip.classList.toggle("is-ghost", enabled);
+  ghostToggle.textContent = enabled ? "Solid" : "Fade";
+  ghostToggle.setAttribute("aria-pressed", String(enabled));
+  ghostToggle.setAttribute(
+    "aria-label",
+    enabled ? "Use full opacity" : "Use ghost mode",
+  );
+}
 
 function showEvent(event: PipEvent) {
   window.clearTimeout(timeout);
@@ -59,7 +78,7 @@ function showEvent(event: PipEvent) {
   void bubble.offsetWidth;
   bubble.classList.add("arriving");
 
-  timeout = window.setTimeout(hideBubble, isAttention ? 12_000 : 8_000);
+  timeout = window.setTimeout(hideBubble, 3_000);
 }
 
 function hideBubble() {
@@ -68,8 +87,28 @@ function hideBubble() {
   setStatus("idle");
 }
 
+function stopThinkingAnimation() {
+  window.clearInterval(thinkingInterval);
+  thinkingInterval = undefined;
+}
+
+function startThinkingAnimation() {
+  stopThinkingAnimation();
+  thinkingImageIndex = 0;
+  image.src = thinkingImages[thinkingImageIndex];
+  thinkingInterval = window.setInterval(() => {
+    thinkingImageIndex = (thinkingImageIndex + 1) % thinkingImages.length;
+    image.src = thinkingImages[thinkingImageIndex];
+  }, 3_000);
+}
+
 function setStatus(status: PipStatus) {
-  image.src = imageByStatus[status];
+  if (status === "thinking") {
+    startThinkingAnimation();
+  } else {
+    stopThinkingAnimation();
+    image.src = imageByStatus[status];
+  }
   image.alt = altByStatus[status];
   pip.dataset.status = status;
   pip.classList.toggle("is-alert", status === "ready");
@@ -80,12 +119,23 @@ dismiss.addEventListener("pointerdown", (event) => {
   hideBubble();
 });
 
+ghostToggle.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+  void invoke("toggle_ghost_mode");
+});
+
+hidePip.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+  void invoke("hide_window");
+});
+
 pip.addEventListener("pointerdown", async (event) => {
   if ((event.target as HTMLElement).closest("button")) return;
-  hint.classList.add("is-hidden");
   await getCurrentWindow().startDragging();
 });
 
 setStatus("idle");
+void listen<boolean>("pip:ghost", ({ payload }) => setGhostMode(payload));
 void listen<PipEvent>("pip:event", ({ payload }) => showEvent(payload));
+void invoke<boolean>("ghost_mode").then(setGhostMode);
 void invoke<PipEvent | null>("initial_event").then((event) => event && showEvent(event));

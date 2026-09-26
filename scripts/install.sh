@@ -5,6 +5,23 @@ usage() {
   echo "Usage: $0 [--remote SSH_HOST] [--remote-port PORT] [APP_SOURCE]"
 }
 
+stop_running_app() {
+  if ! pgrep -x pip-chan >/dev/null; then
+    return
+  fi
+
+  pkill -x pip-chan || true
+  for _ in {1..30}; do
+    if ! pgrep -x pip-chan >/dev/null; then
+      return
+    fi
+    sleep 0.1
+  done
+
+  echo "Pip-chan did not stop. Quit it and run the installer again." >&2
+  exit 1
+}
+
 APP_SOURCE="src-tauri/target/release/bundle/macos/Pip-chan.app"
 APP_SOURCE_SET=false
 REMOTE_HOST=""
@@ -63,6 +80,7 @@ if [[ ! -d "$APP_SOURCE" ]]; then
   echo "Build the release bundle first, or pass the path to Pip-chan.app." >&2
   exit 1
 fi
+stop_running_app
 mkdir -p "$HOME/Applications"
 if [[ -e "$APP_DESTINATION" ]]; then
   rm -rf -- "$APP_DESTINATION"

@@ -9,6 +9,10 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - One local Unix socket at `~/.pip-chan/pip.sock`; no network listener.
 - One token-protected remote socket at `~/.pip-chan/remote.sock` for SSH forwarding.
 - A singleton app: repeated `signal` invocations reach the running overlay.
+- Signal commands exit immediately when the overlay is closed. Hooks never launch the GUI.
+- A tray command toggles 20% idle ghost mode. Agent activity stays fully visible.
+- Hover controls provide quick ghost-mode and hide actions.
+- A tray command and `minimize` CLI command minimize the overlay.
 - `configure codex` installs user-level Codex hooks and a `notify` command.
 - `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.
@@ -36,6 +40,13 @@ src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
   signal --source test --event idle
 ```
 
+To minimize or show a running release build:
+
+```sh
+src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan minimize
+src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan show
+```
+
 ## Configure integrations
 
 Run these against the built Pip-chan executable:
@@ -56,6 +67,16 @@ npm run tauri build
 ```
 
 The installer replaces `Pip-chan.app` in `~/Applications`, configures both CLIs, and does not require administrator access. Launch Pip-chan from `~/Applications` after installation. It changes only user-level files under `~/Applications`, `~/.pip-chan`, `~/.codex`, and `~/.claude`.
+
+## App icon
+
+Put a square PNG or SVG source at `app-icon.png` in the repository root. Then generate the platform icon files:
+
+```sh
+npm run tauri icon app-icon.png
+```
+
+The command writes the generated icons under `src-tauri/icons`, including the macOS `icon.icns` file. Build the app again after icon generation.
 
 ## Remote agents over SSH
 

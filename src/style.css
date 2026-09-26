@@ -23,6 +23,43 @@ html, body, #pip {
 
 #pip:active { cursor: grabbing; }
 
+#hover-controls {
+  position: absolute;
+  z-index: 4;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 5px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+#pip:hover #hover-controls,
+#hover-controls:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.hover-control {
+  width: 54px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid rgba(237, 220, 255, .72);
+  border-radius: 10px;
+  background: rgba(35, 25, 57, .88);
+  box-shadow: 0 5px 16px rgba(13, 7, 29, .35);
+  color: #fffaff;
+  cursor: pointer;
+  font: 700 11px/1 ui-rounded, "SF Pro Rounded", sans-serif;
+}
+
+.hover-control:hover {
+  background: rgba(83, 51, 119, .96);
+}
+
 #pip-image {
   position: absolute;
   inset: 18px 4px 0;
@@ -31,8 +68,11 @@ html, body, #pip {
   object-fit: contain;
   object-position: bottom center;
   pointer-events: none;
-  transition: filter 180ms ease, transform 180ms ease;
+  opacity: 1;
+  transition: filter 180ms ease, opacity 180ms ease, transform 180ms ease;
 }
+
+#pip.is-ghost[data-status="idle"] #pip-image { opacity: .2; }
 
 #pip.is-alert #pip-image {
   filter: saturate(1.12) brightness(1.08) drop-shadow(0 0 15px rgba(198, 127, 255, .85));
@@ -90,22 +130,6 @@ html, body, #pip {
 }
 
 #dismiss:hover { background: rgba(255,255,255,.25); }
-
-#hint {
-  position: absolute;
-  z-index: 2;
-  right: 15px;
-  bottom: 13px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(23, 14, 38, .68);
-  color: rgba(255,255,255,.82);
-  font-size: 10px;
-  opacity: 1;
-  transition: opacity .35s ease;
-}
-
-#hint.is-hidden { opacity: 0; }
 
 @keyframes pop {
   from { opacity: 0; transform: translateY(12px) scale(.92); }
