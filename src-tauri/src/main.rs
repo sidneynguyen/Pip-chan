@@ -16,7 +16,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager, WindowEvent,
 };
-use toml_edit::{Array, DocumentMut, Item, Value};
+use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 const SOCKET_NAME: &str = "pip.sock";
 
@@ -115,8 +115,8 @@ fn reset_position(window: tauri::WebviewWindow) -> Result<(), String> {
         .ok_or_else(|| "No display is available".to_string())?;
     let size = monitor.size();
     let scale = monitor.scale_factor();
-    let x = (size.width as f64 / scale - 375.0).max(0.0) as i32;
-    let y = (size.height as f64 / scale - 600.0).max(0.0) as i32;
+    let x = (size.width as f64 / scale - 355.0).max(0.0) as i32;
+    let y = (size.height as f64 / scale - 570.0).max(0.0) as i32;
     window
         .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
             (x as f64 * scale) as i32,
@@ -289,21 +289,65 @@ fn configure_codex() -> Result<(), String> {
         .and_then(Value::as_array)
         .map(|array| array.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
 
-    if existing_notify.as_ref().is_some_and(|notify| notify == &command) {
-        println!("Codex is already connected to Pip-chan.");
-        return Ok(());
-    }
-    if let Some(notify) = existing_notify {
+    if let Some(notify) = existing_notify.as_ref().filter(|notify| *notify != &command).cloned() {
         let mut integrations = read_integrations();
         integrations.codex_previous_notify = Some(notify);
         write_integrations(&integrations)?;
     }
 
-    let mut array = Array::new();
-    for argument in command { array.push(argument); }
-    document["notify"] = Item::Value(Value::Array(array));
+    if existing_notify.as_ref() != Some(&command) {
+        let mut array = Array::new();
+        for argument in command { array.push(argument); }
+        document["notify"] = Item::Value(Value::Array(array));
+    }
+
+    add_codex_hook(&mut document, "UserPromptSubmit", shell_command(&pip_command("codex", "thinking")?))?;
+    add_codex_hook(&mut document, "PermissionRequest", shell_command(&pip_command("codex", "attention")?))?;
+
     backup_then_write(&config, &existing, &document.to_string())?;
-    println!("Connected Codex to Pip-chan.");
+    println!("Connected Codex to Pip-chan. Open `/hooks` in Codex to review and trust the Pip-chan hooks.");
+    Ok(())
+}
+
+fn add_codex_hook(document: &mut DocumentMut, event: &str, command: String) -> Result<(), String> {
+    if !document.contains_key("hooks") {
+        document["hooks"] = Item::Table(Table::new());
+    }
+    let hooks = document["hooks"]
+        .as_table_mut()
+        .ok_or("Codex config `hooks` must be a table.")?;
+    if !hooks.contains_key(event) {
+        hooks[event] = Item::ArrayOfTables(ArrayOfTables::new());
+    }
+    let entries = hooks[event]
+        .as_array_of_tables_mut()
+        .ok_or_else(|| format!("Codex config `hooks.{event}` must be an array of tables."))?;
+    let exists = entries.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(|commands| {
+                commands.iter().any(|hook| {
+                    hook.get("command")
+                        .and_then(Item::as_value)
+                        .and_then(Value::as_str)
+                        == Some(command.as_str())
+                })
+            })
+    });
+    if exists {
+        return Ok(());
+    }
+
+    let mut hook = Table::new();
+    hook["type"] = value("command");
+    hook["command"] = value(command);
+    let mut hook_entries = ArrayOfTables::new();
+    hook_entries.push(hook);
+
+    let mut entry = Table::new();
+    entry["hooks"] = Item::ArrayOfTables(hook_entries);
+    entries.push(entry);
     Ok(())
 }
 
@@ -315,6 +359,7 @@ fn configure_claude() -> Result<(), String> {
     let hooks = root_object.entry("hooks").or_insert_with(|| JsonValue::Object(Map::new()))
         .as_object_mut().ok_or("Claude settings `hooks` must be a JSON object.")?;
 
+    add_claude_hook(hooks, "UserPromptSubmit", None, shell_command(&pip_command("claude", "thinking")?));
     add_claude_hook(hooks, "Stop", None, shell_command(&pip_command("claude", "ready")?));
     add_claude_hook(hooks, "Notification", Some("permission_prompt"), shell_command(&pip_command("claude", "attention")?));
 
@@ -365,9 +410,40 @@ fn write_integrations(integrations: &Integrations) -> Result<(), String> {
 }
 
 fn forward_previous_codex_notify(event: &PipEvent, payload: &str) {
-    if event.source != "codex" || payload.is_empty() { return; }
+    if !should_forward_previous_codex_notify(event, payload) { return; }
     let Some(command) = read_integrations().codex_previous_notify else { return };
     let Some((program, arguments)) = command.split_first() else { return };
     let Ok(mut child) = Command::new(program).args(arguments).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { return };
     if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(payload.as_bytes()); }
+}
+
+fn should_forward_previous_codex_notify(event: &PipEvent, payload: &str) -> bool {
+    event.source == "codex" && event.event == "ready" && !payload.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_hook_is_added_once() {
+        let mut document = "".parse::<DocumentMut>().unwrap();
+        let command = "'pip-chan' 'signal' '--event' 'thinking'".to_string();
+
+        add_codex_hook(&mut document, "UserPromptSubmit", command.clone()).unwrap();
+        add_codex_hook(&mut document, "UserPromptSubmit", command).unwrap();
+
+        let entries = document["hooks"]["UserPromptSubmit"].as_array_of_tables().unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn only_ready_codex_payloads_are_forwarded() {
+        let ready = PipEvent { source: "codex".to_string(), event: "ready".to_string() };
+        let thinking = PipEvent { source: "codex".to_string(), event: "thinking".to_string() };
+
+        assert!(should_forward_previous_codex_notify(&ready, "{}"));
+        assert!(!should_forward_previous_codex_notify(&thinking, "{}"));
+        assert!(!should_forward_previous_codex_notify(&ready, ""));
+    }
 }

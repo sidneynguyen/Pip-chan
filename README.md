@@ -5,10 +5,11 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 ## What is included
 
 - A transparent, always-on-top Tauri overlay with a menu-bar control.
+- Idle, thinking, and waiting images that follow agent state signals.
 - One local Unix socket at `~/.pip-chan/pip.sock`; no network listener.
 - A singleton app: repeated `signal` invocations reach the running overlay.
-- `configure codex` installs a user-level Codex `notify` command.
-- `configure claude` merges a Claude `Stop` hook and a `permission_prompt` hook into global settings.
+- `configure codex` installs user-level Codex hooks and a `notify` command.
+- `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.
 - Pip-chan stores only its window position and an existing Codex notify command that it forwards. It does not retain prompts, code, or terminal output.
 
@@ -25,7 +26,13 @@ To send a test event to a running release build:
 
 ```sh
 src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
+  signal --source test --event thinking
+
+src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
   signal --source test --event ready
+
+src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
+  signal --source test --event idle
 ```
 
 ## Configure integrations
@@ -37,7 +44,7 @@ src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan confi
 src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan configure claude
 ```
 
-Codex calls the executable through its user-level `notify` setting and passes the JSON payload on standard input. Pip-chan forwards a pre-existing notify command after sending its own event. Claude Code gets a `Stop` hook for ready events and a `Notification` hook for delayed permission requests.
+Codex uses `UserPromptSubmit` and `PermissionRequest` hooks for thinking and approval events. It uses its user-level `notify` setting for ready events when a turn completes. Pip-chan forwards a pre-existing notify command after sending its own event. After configuration, open `/hooks` in Codex and trust the Pip-chan hooks. Claude Code gets a `UserPromptSubmit` hook for thinking events, a `Stop` hook for ready events, and a `Notification` hook for delayed permission requests.
 
 ## Build and install on macOS
 
@@ -55,4 +62,4 @@ The socket protocol and Tauri UI are portable. Linux needs WebKitGTK and desktop
 
 ## Asset
 
-`src/assets/pip-idle.png` and `src/assets/pip-ready.png` were generated with OpenAI image generation for this project. The ready state uses a brighter glow and motion treatment in the overlay.
+`src/assets/pip-idle.png`, `src/assets/pip-thinking.png`, and `src/assets/pip-ready.png` were generated with OpenAI image generation for this project. The ready state uses a brighter glow and motion treatment in the overlay.

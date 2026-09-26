@@ -10,16 +10,17 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "Pip-chan",
-        "width": 360,
-        "height": 560,
-        "minWidth": 360,
-        "minHeight": 560,
-        "maxWidth": 360,
-        "maxHeight": 560,
+        "width": 340,
+        "height": 530,
+        "minWidth": 340,
+        "minHeight": 530,
+        "maxWidth": 340,
+        "maxHeight": 530,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,

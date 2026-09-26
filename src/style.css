@@ -6,7 +6,13 @@
 
 * { box-sizing: border-box; }
 
-html, body, #pip { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html, body, #pip {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
 
 #pip {
   position: relative;
@@ -36,7 +42,7 @@ html, body, #pip { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .bubble {
   position: absolute;
   z-index: 2;
-  top: 8px;
+  top: 2px;
   left: 6px;
   width: 255px;
   min-height: 66px;
