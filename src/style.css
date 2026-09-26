@@ -36,7 +36,7 @@ html, body, #pip {
   transition: opacity 140ms ease, transform 140ms ease;
 }
 
-#pip:hover #hover-controls,
+#pip.has-pointer-activity:hover #hover-controls,
 #hover-controls:focus-within {
   opacity: 1;
   pointer-events: auto;
@@ -72,7 +72,7 @@ html, body, #pip {
   transition: filter 180ms ease, opacity 180ms ease, transform 180ms ease;
 }
 
-#pip.is-ghost[data-status="idle"] #pip-image { opacity: .2; }
+#pip.is-ghost #pip-image { opacity: .2; }
 
 #pip.is-alert #pip-image {
   filter: saturate(1.12) brightness(1.08) drop-shadow(0 0 15px rgba(198, 127, 255, .85));

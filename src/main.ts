@@ -64,13 +64,7 @@ function showEvent(event: PipEvent) {
     return;
   }
 
-  const isAttention = event.event === "attention";
-
-  if (isAttention) {
-    copy.textContent = `${event.source === "claude" ? "Claude" : "Codex"} needs your approval.`;
-  } else {
-    copy.textContent = "Baka! I'm waiting...";
-  }
+  copy.textContent = "Baka! I'm waiting...";
 
   setStatus("ready");
   bubble.hidden = false;
@@ -128,6 +122,14 @@ hidePip.addEventListener("pointerdown", (event) => {
   event.stopPropagation();
   void invoke("hide_window");
 });
+
+function enableHoverControls(event: PointerEvent) {
+  if (event.movementX === 0 && event.movementY === 0) return;
+  pip.classList.add("has-pointer-activity");
+  pip.removeEventListener("pointermove", enableHoverControls);
+}
+
+pip.addEventListener("pointermove", enableHoverControls);
 
 pip.addEventListener("pointerdown", async (event) => {
   if ((event.target as HTMLElement).closest("button")) return;

@@ -81,21 +81,6 @@ fn main() {
         return;
     }
 
-    if args
-        .get(1)
-        .is_some_and(|arg| arg == "minimize" || arg == "show")
-    {
-        let event = PipEvent {
-            source: "pip-chan".to_string(),
-            event: args[1].clone(),
-        };
-        if let Err(error) = send_to_running_app(&event) {
-            eprintln!("Pip-chan is not running: {error}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
     if args.get(1).is_some_and(|arg| arg == "signal") {
         let event = event_from_args(&args);
         let payload = signal_payload(&args, &event);
@@ -121,7 +106,7 @@ fn run_app(startup_event: Option<PipEvent>) {
                     .get(1)
                     .is_some_and(|arg| arg == "signal" || arg == LAUNCH_WITH_EVENT_COMMAND)
                 {
-                    dispatch_event(app, event_from_args(&args));
+                    emit_event(app, event_from_args(&args));
                 } else {
                     show_window(app);
                 }
@@ -137,7 +122,7 @@ fn run_app(startup_event: Option<PipEvent>) {
             install_tray(app)?;
 
             if let Some(event) = startup_event.as_ref() {
-                dispatch_event(app.handle(), event.clone());
+                emit_event(app.handle(), event.clone());
             }
             if let Some(window) = app.get_webview_window("main") {
                 restore_position(&window);
@@ -219,7 +204,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         .items(&[&show, &ghost, &minimize, &reset, &quit])
         .build()?;
     let app_handle = app.handle().clone();
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
     TrayIconBuilder::with_id("pip-chan")
         .icon(icon)
@@ -243,23 +228,6 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
 
 fn emit_event(app: &tauri::AppHandle, event: PipEvent) {
     let _ = app.emit("pip:event", event);
-}
-
-fn dispatch_event(app: &tauri::AppHandle, event: PipEvent) {
-    if event.source == "pip-chan" {
-        match event.event.as_str() {
-            "minimize" => {
-                minimize_window(app);
-                return;
-            }
-            "show" => {
-                show_window(app);
-                return;
-            }
-            _ => {}
-        }
-    }
-    emit_event(app, event);
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -321,7 +289,7 @@ fn start_socket_server(
                             .is_some_and(|actual| tokens_match(expected, actual))
                     });
                     if authorized {
-                        dispatch_event(
+                        emit_event(
                             &app,
                             PipEvent {
                                 source: event.source,

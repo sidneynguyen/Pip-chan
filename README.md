@@ -10,9 +10,9 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - One token-protected remote socket at `~/.pip-chan/remote.sock` for SSH forwarding.
 - A singleton app: repeated `signal` invocations reach the running overlay.
 - Signal commands exit immediately when the overlay is closed. Hooks never launch the GUI.
-- A tray command toggles 20% idle ghost mode. Agent activity stays fully visible.
+- A tray command toggles 20% ghost mode across all agent states.
 - Hover controls provide quick ghost-mode and hide actions.
-- A tray command and `minimize` CLI command minimize the overlay.
+- A tray command minimizes the overlay.
 - `configure codex` installs user-level Codex hooks and a `notify` command.
 - `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.
@@ -38,13 +38,6 @@ src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
 
 src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan \
   signal --source test --event idle
-```
-
-To minimize or show a running release build:
-
-```sh
-src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan minimize
-src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan show
 ```
 
 ## Configure integrations
