@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 [--port PORT] SSH_HOST [REMOTE_COMMAND...]"
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+REMOTE_PORT=47821
+if [[ "${1:-}" == "--port" ]]; then
+  if [[ $# -lt 3 ]]; then
+    usage >&2
+    exit 1
+  fi
+  REMOTE_PORT="$2"
+  shift 2
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 1
+fi
+if [[ ! "$REMOTE_PORT" =~ ^[0-9]+$ ]] || (( REMOTE_PORT < 1024 || REMOTE_PORT > 65535 )); then
+  echo "Use a port from 1024 through 65535." >&2
+  exit 1
+fi
+
+SSH_HOST="$1"
+shift
+LOCAL_SOCKET="${PIP_CHAN_SOCKET:-$HOME/.pip-chan/remote.sock}"
+
+exec ssh \
+  -o ExitOnForwardFailure=yes \
+  -R "127.0.0.1:$REMOTE_PORT:$LOCAL_SOCKET" \
+  "$SSH_HOST" "$@"

@@ -3,13 +3,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use std::{
-    fs,
+    fs::{self, File, OpenOptions},
     io::{self, IsTerminal, Read, Write},
-    os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}},
+    os::unix::{
+        fs::{OpenOptionsExt, PermissionsExt},
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
     thread,
+    time::Duration,
 };
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -19,11 +23,19 @@ use tauri::{
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 const SOCKET_NAME: &str = "pip.sock";
+const REMOTE_SOCKET_NAME: &str = "remote.sock";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct PipEvent {
     source: String,
     event: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SocketEvent {
+    source: String,
+    event: String,
+    token: Option<String>,
 }
 
 #[derive(Default)]
@@ -44,6 +56,17 @@ fn main() {
         if let Err(error) = configure(target) {
             eprintln!("Pip-chan configuration failed: {error}");
             std::process::exit(1);
+        }
+        return;
+    }
+
+    if args.get(1).is_some_and(|arg| arg == "remote-token") {
+        match ensure_remote_token() {
+            Ok(token) => println!("{token}"),
+            Err(error) => {
+                eprintln!("Pip-chan remote token failed: {error}");
+                std::process::exit(1);
+            }
         }
         return;
     }
@@ -79,7 +102,12 @@ fn run_app(initial: Option<(PipEvent, String)>) {
             }
         }))
         .setup(move |app| {
-            start_socket_server(app.handle().clone())?;
+            start_socket_server(app.handle().clone(), socket_path(), None)?;
+            start_socket_server(
+                app.handle().clone(),
+                remote_socket_path(),
+                Some(ensure_remote_token().map_err(tauri::Error::Io)?),
+            )?;
             install_tray(app)?;
 
             if let Some((event, payload)) = initial.as_ref() {
@@ -158,10 +186,14 @@ fn emit_event(app: &tauri::AppHandle, event: PipEvent) {
     let _ = app.emit("pip:event", event);
 }
 
-fn start_socket_server(app: tauri::AppHandle) -> tauri::Result<()> {
-    let socket = socket_path();
+fn start_socket_server(
+    app: tauri::AppHandle,
+    socket: PathBuf,
+    expected_token: Option<String>,
+) -> tauri::Result<()> {
     if let Some(parent) = socket.parent() {
         fs::create_dir_all(parent).map_err(tauri::Error::Io)?;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
     }
     if socket.exists() {
         let _ = fs::remove_file(&socket);
@@ -172,13 +204,35 @@ fn start_socket_server(app: tauri::AppHandle) -> tauri::Result<()> {
     thread::spawn(move || {
         for connection in listener.incoming().flatten() {
             let mut input = String::new();
-            if connection
-                .try_clone()
-                .and_then(|mut stream| stream.read_to_string(&mut input))
+            let stream = match connection.try_clone() {
+                Ok(stream) => stream,
+                Err(_) => continue,
+            };
+            if expected_token.is_some() {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            }
+            if stream
+                .take(4097)
+                .read_to_string(&mut input)
                 .is_ok()
+                && input.len() <= 4096
             {
-                if let Ok(event) = serde_json::from_str::<PipEvent>(&input) {
-                    emit_event(&app, event);
+                if let Ok(event) = serde_json::from_str::<SocketEvent>(&input) {
+                    let authorized = expected_token.as_ref().map_or(true, |expected| {
+                        event
+                            .token
+                            .as_deref()
+                            .is_some_and(|actual| tokens_match(expected, actual))
+                    });
+                    if authorized {
+                        emit_event(
+                            &app,
+                            PipEvent {
+                                source: event.source,
+                                event: event.event,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -225,6 +279,56 @@ fn pip_dir() -> PathBuf {
 
 fn socket_path() -> PathBuf {
     pip_dir().join(SOCKET_NAME)
+}
+
+fn remote_socket_path() -> PathBuf {
+    pip_dir().join(REMOTE_SOCKET_NAME)
+}
+
+fn remote_token_path() -> PathBuf {
+    pip_dir().join("remote-token")
+}
+
+fn ensure_remote_token() -> io::Result<String> {
+    let path = remote_token_path();
+    if let Ok(token) = fs::read_to_string(&path) {
+        let token = token.trim().to_string();
+        if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            fs::set_permissions(pip_dir(), fs::Permissions::from_mode(0o700))?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            return Ok(token);
+        }
+    }
+
+    fs::create_dir_all(pip_dir())?;
+    fs::set_permissions(pip_dir(), fs::Permissions::from_mode(0o700))?;
+    let mut random = [0u8; 32];
+    File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let token = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)?;
+    output.write_all(token.as_bytes())?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(token)
+}
+
+fn tokens_match(expected: &str, actual: &str) -> bool {
+    if expected.len() != actual.len() {
+        return false;
+    }
+    expected
+        .bytes()
+        .zip(actual.bytes())
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
 }
 
 fn integration_path() -> PathBuf {
@@ -445,5 +549,12 @@ mod tests {
         assert!(should_forward_previous_codex_notify(&ready, "{}"));
         assert!(!should_forward_previous_codex_notify(&thinking, "{}"));
         assert!(!should_forward_previous_codex_notify(&ready, ""));
+    }
+
+    #[test]
+    fn remote_tokens_must_match() {
+        assert!(tokens_match("secret", "secret"));
+        assert!(!tokens_match("secret", "other!"));
+        assert!(!tokens_match("secret", "short"));
     }
 }

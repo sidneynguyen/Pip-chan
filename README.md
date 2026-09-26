@@ -7,11 +7,12 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - A transparent, always-on-top Tauri overlay with a menu-bar control.
 - Idle, thinking, and waiting images that follow agent state signals.
 - One local Unix socket at `~/.pip-chan/pip.sock`; no network listener.
+- One token-protected remote socket at `~/.pip-chan/remote.sock` for SSH forwarding.
 - A singleton app: repeated `signal` invocations reach the running overlay.
 - `configure codex` installs user-level Codex hooks and a `notify` command.
 - `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.
-- Pip-chan stores only its window position and an existing Codex notify command that it forwards. It does not retain prompts, code, or terminal output.
+- Pip-chan stores its window position, a remote authentication token, and an existing Codex notify command that it forwards. It does not retain prompts, code, or terminal output.
 
 ## Development
 
@@ -55,6 +56,40 @@ npm run tauri build
 ```
 
 The installer replaces `Pip-chan.app` in `~/Applications`, configures both CLIs, and does not require administrator access. Launch Pip-chan from `~/Applications` after installation. It changes only user-level files under `~/Applications`, `~/.pip-chan`, `~/.codex`, and `~/.claude`.
+
+## Remote agents over SSH
+
+Install Pip-chan on your Mac and install the remote helper and user-level hooks:
+
+```sh
+./scripts/install.sh --remote my-server
+```
+
+The `--remote` option copies `pip-chan-signal` to `~/.local/bin` on the remote server. It updates `~/.codex/hooks.json` and `~/.claude/settings.json` on that server. It creates `*.pip-chan.bak` files before it changes existing hook files. It does not install the app, images, Node.js packages, or Rust packages on the server.
+
+Start Pip-chan on your Mac. Then connect through the SSH helper:
+
+```sh
+./scripts/pip-chan-ssh my-server
+tmux attach
+```
+
+The SSH helper forwards remote loopback port `47821` to the token-protected Pip-chan socket on your Mac. Codex and Claude Code in that SSH session or an attached tmux session send state events through the tunnel. Hook failures do not stop the agent when the tunnel is unavailable.
+
+Open `/hooks` in remote Codex and trust the Pip-chan hooks after installation. Test the tunnel from the remote server:
+
+```sh
+~/.local/bin/pip-chan-signal test --event thinking
+```
+
+Use another port if `47821` is not available:
+
+```sh
+./scripts/install.sh --remote my-server --remote-port 49152
+./scripts/pip-chan-ssh --port 49152 my-server
+```
+
+SSH must permit remote TCP forwarding. The remote listener binds only to `127.0.0.1`. The helper sends only the state source, event, and authentication token. It discards hook input such as prompts and terminal output.
 
 ## Linux later
 
