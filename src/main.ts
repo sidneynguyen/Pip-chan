@@ -39,6 +39,7 @@ const altByStatus: Record<PipStatus, string> = {
 let timeout: number | undefined;
 let thinkingInterval: number | undefined;
 let thinkingImageIndex = 0;
+let currentStatus: PipStatus = "idle";
 
 function setGhostMode(enabled: boolean) {
   pip.classList.toggle("is-ghost", enabled);
@@ -51,6 +52,8 @@ function setGhostMode(enabled: boolean) {
 }
 
 function showEvent(event: PipEvent) {
+  if (currentStatus === "ready") return;
+
   window.clearTimeout(timeout);
 
   if (event.event === "idle") {
@@ -72,11 +75,12 @@ function showEvent(event: PipEvent) {
   void bubble.offsetWidth;
   bubble.classList.add("arriving");
 
-  timeout = window.setTimeout(hideBubble, 3_000);
+  timeout = window.setTimeout(hideBubble, 5_000);
 }
 
 function hideBubble() {
   window.clearTimeout(timeout);
+  timeout = undefined;
   bubble.hidden = true;
   setStatus("idle");
 }
@@ -97,6 +101,8 @@ function startThinkingAnimation() {
 }
 
 function setStatus(status: PipStatus) {
+  currentStatus = status;
+
   if (status === "thinking") {
     startThinkingAnimation();
   } else {
