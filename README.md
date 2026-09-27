@@ -12,7 +12,7 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - Signal commands exit immediately when the overlay is closed. Hooks never launch the GUI.
 - A tray command toggles 20% ghost mode across all agent states.
 - Hover controls provide quick ghost-mode and hide actions.
-- A tray command minimizes the overlay.
+- Tray commands show or hide the overlay and change its size.
 - `configure codex` installs user-level Codex hooks and a `notify` command.
 - `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.

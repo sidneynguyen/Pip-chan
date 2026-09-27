@@ -16,15 +16,21 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{MenuBuilder, MenuItem, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Emitter, Manager, WindowEvent,
+    Emitter, LogicalSize, Manager, PhysicalPosition, WindowEvent,
 };
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 const SOCKET_NAME: &str = "pip.sock";
 const REMOTE_SOCKET_NAME: &str = "remote.sock";
 const LAUNCH_WITH_EVENT_COMMAND: &str = "__launch-with-event";
+const BASE_WINDOW_WIDTH: f64 = 240.0;
+const BASE_WINDOW_HEIGHT: f64 = 336.0;
+const DEFAULT_SIZE_PERCENT: u32 = 130;
+const MIN_SIZE_PERCENT: u32 = 50;
+const MAX_SIZE_PERCENT: u32 = 200;
+const SIZE_STEP_PERCENT: u32 = 10;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct PipEvent {
@@ -43,7 +49,10 @@ struct SocketEvent {
 struct PipState {
     initial_event: Mutex<Option<PipEvent>>,
     ghost_mode: Mutex<bool>,
+    size_percent: Mutex<u32>,
 }
+
+struct VisibilityMenuItem(MenuItem<tauri::Wry>);
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Integrations {
@@ -99,6 +108,7 @@ fn run_app(startup_event: Option<PipEvent>) {
         .manage(PipState {
             initial_event: Mutex::new(startup_event.clone()),
             ghost_mode: Mutex::new(false),
+            size_percent: Mutex::new(load_size_percent()),
         })
         .plugin(tauri_plugin_single_instance::init(
             move |app, args, _cwd| {
@@ -125,6 +135,7 @@ fn run_app(startup_event: Option<PipEvent>) {
                 emit_event(app.handle(), event.clone());
             }
             if let Some(window) = app.get_webview_window("main") {
+                let _ = resize_window(&window, current_size_percent(app.handle()));
                 restore_position(&window);
             }
             Ok(())
@@ -172,7 +183,9 @@ fn ghost_mode(state: tauri::State<'_, PipState>) -> bool {
 
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.hide().map_err(|error| error.to_string())
+    window.hide().map_err(|error| error.to_string())?;
+    update_visibility_menu_item(window.app_handle(), false);
+    Ok(())
 }
 
 #[tauri::command]
@@ -184,8 +197,12 @@ fn reset_position(window: tauri::WebviewWindow) -> Result<(), String> {
         .ok_or_else(|| "No display is available".to_string())?;
     let size = monitor.size();
     let scale = monitor.scale_factor();
-    let x = (size.width as f64 / scale - 355.0).max(0.0) as i32;
-    let y = (size.height as f64 / scale - 570.0).max(0.0) as i32;
+    let window_size = window
+        .outer_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let x = (size.width as f64 / scale - window_size.width - 55.0).max(0.0) as i32;
+    let y = (size.height as f64 / scale - window_size.height - 102.0).max(0.0) as i32;
     window
         .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
             (x as f64 * scale) as i32,
@@ -195,14 +212,26 @@ fn reset_position(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItemBuilder::with_id("show", "Show Pip-chan").build(app)?;
+    let visibility =
+        MenuItemBuilder::with_id("visibility", visibility_menu_label(true)).build(app)?;
     let ghost = MenuItemBuilder::with_id("ghost", "Toggle ghost mode").build(app)?;
-    let minimize = MenuItemBuilder::with_id("minimize", "Minimize Pip-chan").build(app)?;
+    let size_increase = MenuItemBuilder::with_id("size_increase", "Increase size").build(app)?;
+    let size_decrease = MenuItemBuilder::with_id("size_decrease", "Decrease size").build(app)?;
+    let size_reset = MenuItemBuilder::with_id("size_reset", "Reset size").build(app)?;
     let reset = MenuItemBuilder::with_id("reset", "Reset position").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Pip-chan").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&show, &ghost, &minimize, &reset, &quit])
+        .items(&[
+            &visibility,
+            &ghost,
+            &size_increase,
+            &size_decrease,
+            &size_reset,
+            &reset,
+            &quit,
+        ])
         .build()?;
+    app.manage(VisibilityMenuItem(visibility));
     let app_handle = app.handle().clone();
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
@@ -211,14 +240,22 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         .tooltip("Pip-chan")
         .menu(&menu)
         .on_menu_event(move |_tray, event| match event.id().as_ref() {
-            "show" => show_window(&app_handle),
+            "visibility" => toggle_window_visibility(&app_handle),
             "ghost" => toggle_ghost_mode(app_handle.clone()),
-            "minimize" => minimize_window(&app_handle),
             "reset" => {
                 if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = reset_position(window);
                 }
             }
+            "size_increase" => set_size_percent(
+                &app_handle,
+                current_size_percent(&app_handle) + SIZE_STEP_PERCENT,
+            ),
+            "size_decrease" => set_size_percent(
+                &app_handle,
+                current_size_percent(&app_handle).saturating_sub(SIZE_STEP_PERCENT),
+            ),
+            "size_reset" => set_size_percent(&app_handle, DEFAULT_SIZE_PERCENT),
             "quit" => app_handle.exit(0),
             _ => {}
         })
@@ -232,16 +269,89 @@ fn emit_event(app: &tauri::AppHandle, event: PipEvent) {
 
 fn show_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        update_visibility_menu_item(app, true);
     }
 }
 
-fn minimize_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.minimize();
+fn toggle_window_visibility(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = hide_window(window);
+    } else {
+        show_window(app);
     }
+}
+
+fn visibility_menu_label(visible: bool) -> &'static str {
+    if visible {
+        "Hide Pip-chan"
+    } else {
+        "Show Pip-chan"
+    }
+}
+
+fn update_visibility_menu_item(app: &tauri::AppHandle, visible: bool) {
+    if let Some(item) = app.try_state::<VisibilityMenuItem>() {
+        let _ = item.0.set_text(visibility_menu_label(visible));
+    }
+}
+
+fn current_size_percent(app: &tauri::AppHandle) -> u32 {
+    app.state::<PipState>()
+        .size_percent
+        .lock()
+        .map(|percent| *percent)
+        .unwrap_or(DEFAULT_SIZE_PERCENT)
+}
+
+fn set_size_percent(app: &tauri::AppHandle, percent: u32) {
+    let percent = percent.clamp(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT);
+    let state = app.state::<PipState>();
+    let Ok(mut current) = state.size_percent.lock() else {
+        return;
+    };
+    if *current == percent {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if resize_window_keeping_feet_in_place(&window, percent).is_ok() {
+        *current = percent;
+        save_size_percent(percent);
+    }
+}
+
+fn window_size(percent: u32) -> LogicalSize<f64> {
+    let scale = percent as f64 / 100.0;
+    let round_to_multiple_of_8 = |length: f64| (length / 8.0).round() * 8.0;
+    LogicalSize::new(
+        round_to_multiple_of_8(BASE_WINDOW_WIDTH * scale),
+        round_to_multiple_of_8(BASE_WINDOW_HEIGHT * scale),
+    )
+}
+
+fn resize_window(window: &tauri::WebviewWindow, percent: u32) -> tauri::Result<()> {
+    window.set_size(window_size(percent))?;
+    window.set_zoom(percent as f64 / 100.0)
+}
+
+fn resize_window_keeping_feet_in_place(
+    window: &tauri::WebviewWindow,
+    percent: u32,
+) -> tauri::Result<()> {
+    let old_position = window.outer_position()?;
+    let old_size = window.outer_size()?;
+    resize_window(window, percent)?;
+    let new_size = window_size(percent).to_physical::<i32>(window.scale_factor()?);
+    window.set_position(PhysicalPosition::new(
+        old_position.x + (old_size.width as i32 - new_size.width) / 2,
+        old_position.y + old_size.height as i32 - new_size.height,
+    ))
 }
 
 #[tauri::command]
@@ -433,6 +543,25 @@ fn integration_path() -> PathBuf {
 
 fn position_path() -> PathBuf {
     pip_dir().join("position.json")
+}
+
+fn size_path() -> PathBuf {
+    pip_dir().join("size.json")
+}
+
+fn load_size_percent() -> u32 {
+    fs::read_to_string(size_path())
+        .ok()
+        .and_then(|contents| serde_json::from_str::<JsonValue>(&contents).ok())
+        .and_then(|size| size.get("percent").and_then(JsonValue::as_u64))
+        .map_or(DEFAULT_SIZE_PERCENT, |percent| {
+            percent.clamp(MIN_SIZE_PERCENT.into(), MAX_SIZE_PERCENT.into()) as u32
+        })
+}
+
+fn save_size_percent(percent: u32) {
+    let _ = fs::create_dir_all(pip_dir());
+    let _ = fs::write(size_path(), json!({ "percent": percent }).to_string());
 }
 
 fn save_position(window: &tauri::Window) {

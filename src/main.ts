@@ -14,7 +14,6 @@ const pip = document.querySelector<HTMLElement>("#pip")!;
 const image = document.querySelector<HTMLImageElement>("#pip-image")!;
 const bubble = document.querySelector<HTMLElement>("#bubble")!;
 const copy = document.querySelector<HTMLElement>("#bubble-copy")!;
-const dismiss = document.querySelector<HTMLButtonElement>("#dismiss")!;
 const ghostToggle = document.querySelector<HTMLButtonElement>("#ghost-toggle")!;
 const hidePip = document.querySelector<HTMLButtonElement>("#hide-pip")!;
 
@@ -75,7 +74,7 @@ function showEvent(event: PipEvent) {
   void bubble.offsetWidth;
   bubble.classList.add("arriving");
 
-  timeout = window.setTimeout(hideBubble, 5_000);
+  timeout = window.setTimeout(hideBubble, 10_000);
 }
 
 function hideBubble() {
@@ -114,11 +113,6 @@ function setStatus(status: PipStatus) {
   pip.classList.toggle("is-alert", status === "ready");
 }
 
-dismiss.addEventListener("pointerdown", (event) => {
-  event.stopPropagation();
-  hideBubble();
-});
-
 ghostToggle.addEventListener("pointerdown", (event) => {
   event.stopPropagation();
   void invoke("toggle_ghost_mode");
@@ -139,6 +133,7 @@ pip.addEventListener("pointermove", enableHoverControls);
 
 pip.addEventListener("pointerdown", async (event) => {
   if ((event.target as HTMLElement).closest("button")) return;
+  if (currentStatus === "ready") hideBubble();
   await getCurrentWindow().startDragging();
 });
 
