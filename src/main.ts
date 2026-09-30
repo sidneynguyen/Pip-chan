@@ -6,6 +6,7 @@ import "./style.css";
 type PipEvent = {
   source: "codex" | "claude" | "test" | string;
   event: "idle" | "thinking" | "ready" | "attention" | string;
+  session?: string;
 };
 
 type PipStatus = "idle" | "thinking" | "ready";
@@ -39,6 +40,8 @@ let timeout: number | undefined;
 let thinkingInterval: number | undefined;
 let thinkingImageIndex = 0;
 let currentStatus: PipStatus = "idle";
+const busySessions = new Set<string>();
+let bubbleSession: string | undefined;
 
 function setGhostMode(enabled: boolean) {
   pip.classList.toggle("is-ghost", enabled);
@@ -51,21 +54,28 @@ function setGhostMode(enabled: boolean) {
 }
 
 function showEvent(event: PipEvent) {
-  if (currentStatus === "ready") return;
-
-  window.clearTimeout(timeout);
-
-  if (event.event === "idle") {
-    hideBubble();
-    return;
-  }
-
+  const session = `${event.source}:${event.session ?? ""}`;
   if (event.event === "thinking") {
-    bubble.hidden = true;
-    setStatus("thinking");
+    busySessions.add(session);
+  } else {
+    busySessions.delete(session);
+  }
+
+  if (event.event === "thinking" || event.event === "idle") {
+    if (bubbleSession === session) {
+      hideBubble();
+    } else if (bubbleSession === undefined) {
+      showAgentActivity();
+    }
     return;
   }
 
+  showBubble(session);
+}
+
+function showBubble(session: string) {
+  window.clearTimeout(timeout);
+  bubbleSession = session;
   copy.textContent = "Baka! I'm waiting...";
 
   setStatus("ready");
@@ -80,8 +90,13 @@ function showEvent(event: PipEvent) {
 function hideBubble() {
   window.clearTimeout(timeout);
   timeout = undefined;
+  bubbleSession = undefined;
   bubble.hidden = true;
-  setStatus("idle");
+  showAgentActivity();
+}
+
+function showAgentActivity() {
+  setStatus(busySessions.size > 0 ? "thinking" : "idle");
 }
 
 function stopThinkingAnimation() {
@@ -100,10 +115,11 @@ function startThinkingAnimation() {
 }
 
 function setStatus(status: PipStatus) {
+  const wasThinking = currentStatus === "thinking";
   currentStatus = status;
 
   if (status === "thinking") {
-    startThinkingAnimation();
+    if (!wasThinking) startThinkingAnimation();
   } else {
     stopThinkingAnimation();
     image.src = imageByStatus[status];

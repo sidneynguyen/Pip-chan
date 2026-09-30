@@ -12,6 +12,15 @@ from pathlib import Path
 
 DEFAULT_PORT = 47821
 CONNECT_TIMEOUT = 0.25
+STATE_HOOKS = (
+    ("UserPromptSubmit", None, "thinking"),
+    ("PermissionRequest", None, "attention"),
+    ("PostToolUse", None, "thinking"),
+    ("PreCompact", None, "thinking"),
+    ("PostCompact", "manual", "idle"),
+    ("PostCompact", "auto", "thinking"),
+    ("SessionEnd", None, "idle"),
+)
 
 
 def pip_dir():
@@ -119,13 +128,44 @@ def add_hook(root, event, handler, matcher=None):
     entries.append(entry)
 
 
+def same_handler(left, right):
+    return left.get("command") == right.get("command") and left.get("args") == right.get("args")
+
+
+def remove_hook(root, event, handler, matcher=None):
+    hooks = root.get("hooks")
+    if not isinstance(hooks, dict) or not isinstance(hooks.get(event), list):
+        return
+    remaining_entries = []
+    for entry in hooks[event]:
+        if isinstance(entry, dict) and entry.get("matcher") == matcher:
+            handlers = entry.get("hooks")
+            if isinstance(handlers, list):
+                entry["hooks"] = [
+                    existing
+                    for existing in handlers
+                    if not (isinstance(existing, dict) and same_handler(existing, handler))
+                ]
+                if not entry["hooks"]:
+                    continue
+        remaining_entries.append(entry)
+    if remaining_entries:
+        hooks[event] = remaining_entries
+    else:
+        del hooks[event]
+
+
+def add_state_hooks(root, handler):
+    for event, matcher, state in STATE_HOOKS:
+        add_hook(root, event, handler(state), matcher)
+
+
 def prepare_codex(script):
     path = Path.home() / ".codex" / "hooks.json"
     root = load_json(path, {})
     if not isinstance(root, dict):
         raise ValueError("Codex hooks must be a JSON object.")
-    add_hook(root, "UserPromptSubmit", codex_handler(script, "codex", "thinking"))
-    add_hook(root, "PermissionRequest", codex_handler(script, "codex", "attention"))
+    add_state_hooks(root, lambda state: codex_handler(script, "codex", state))
     add_hook(root, "Stop", codex_handler(script, "codex", "ready", True))
     return path, root
 
@@ -135,14 +175,14 @@ def prepare_claude(script):
     root = load_json(path, {})
     if not isinstance(root, dict):
         raise ValueError("Claude settings must be a JSON object.")
-    add_hook(root, "UserPromptSubmit", claude_handler(script, "claude", "thinking"))
-    add_hook(
+    add_state_hooks(root, lambda state: claude_handler(script, "claude", state))
+    add_hook(root, "Stop", claude_handler(script, "claude", "ready", True))
+    remove_hook(
         root,
         "Notification",
         claude_handler(script, "claude", "attention"),
         "permission_prompt",
     )
-    add_hook(root, "Stop", claude_handler(script, "claude", "ready", True))
     return path, root
 
 
@@ -178,24 +218,30 @@ def read_connection():
     return host, port, token
 
 
-def drain_stdin():
-    if not sys.stdin.isatty():
-        sys.stdin.buffer.read()
+def read_session():
+    if sys.stdin.isatty():
+        return None
+    try:
+        payload = json.loads(sys.stdin.buffer.read())
+    except ValueError:
+        return None
+    session = payload.get("session_id") if isinstance(payload, dict) else None
+    return session if isinstance(session, str) else None
 
 
-def send_signal(source, event):
+def send_signal(source, event, session=None):
     connection = read_connection()
     if connection is None:
         return False
     host, port, token = connection
-    payload = json.dumps(
-        {
-            "source": source,
-            "event": event,
-            "token": token,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+    message = {
+        "source": source,
+        "event": event,
+        "token": token,
+    }
+    if session is not None:
+        message["session"] = session
+    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
     try:
         with socket.create_connection((host, port), CONNECT_TIMEOUT) as connection_socket:
             connection_socket.sendall(payload)
@@ -248,7 +294,7 @@ def main():
         configure(arguments.target, arguments.port, token)
         return
 
-    drain_stdin()
+    session = read_session()
     if arguments.command == "test":
         if not send_signal("test", arguments.event):
             print("Pip-chan did not receive the remote test event.", file=sys.stderr)
@@ -256,7 +302,7 @@ def main():
         print("Sent the {} test event to Pip-chan.".format(arguments.event))
         return
 
-    sent = send_signal(arguments.source, arguments.event)
+    sent = send_signal(arguments.source, arguments.event, session)
     if arguments.hook_result_json:
         print("{}")
     if arguments.strict and not sent:

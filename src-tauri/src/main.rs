@@ -36,12 +36,15 @@ const SIZE_STEP_PERCENT: u32 = 10;
 struct PipEvent {
     source: String,
     event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SocketEvent {
     source: String,
     event: String,
+    session: Option<String>,
     token: Option<String>,
 }
 
@@ -91,8 +94,9 @@ fn main() {
     }
 
     if args.get(1).is_some_and(|arg| arg == "signal") {
-        let event = event_from_args(&args);
+        let mut event = event_from_args(&args);
         let payload = signal_payload(&args, &event);
+        event.session = session_from_payload(&payload);
         if send_to_running_app(&event).is_err() {
             let _ = launch_with_event(&event);
         }
@@ -404,6 +408,7 @@ fn start_socket_server(
                             PipEvent {
                                 source: event.source,
                                 event: event.event,
+                                session: event.session,
                             },
                         );
                     }
@@ -420,12 +425,17 @@ fn send_to_running_app(event: &PipEvent) -> io::Result<()> {
 }
 
 fn launch_with_event(event: &PipEvent) -> io::Result<()> {
-    Command::new(std::env::current_exe()?)
+    let mut command = Command::new(std::env::current_exe()?);
+    command
         .arg(LAUNCH_WITH_EVENT_COMMAND)
         .arg("--source")
         .arg(&event.source)
         .arg("--event")
-        .arg(&event.event)
+        .arg(&event.event);
+    if let Some(session) = &event.session {
+        command.arg("--session").arg(session);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -436,7 +446,12 @@ fn launch_with_event(event: &PipEvent) -> io::Result<()> {
 fn event_from_args(args: &[String]) -> PipEvent {
     let source = option_value(args, "--source").unwrap_or_else(|| "test".to_string());
     let event = option_value(args, "--event").unwrap_or_else(|| "ready".to_string());
-    PipEvent { source, event }
+    let session = option_value(args, "--session");
+    PipEvent {
+        source,
+        event,
+        session,
+    }
 }
 
 fn option_value(args: &[String], name: &str) -> Option<String> {
@@ -451,6 +466,26 @@ fn signal_payload(args: &[String], event: &PipEvent) -> String {
         return trailing_argument(args, "--event").unwrap_or_default();
     }
     read_stdin_with_timeout()
+}
+
+fn session_from_payload(payload: &str) -> Option<String> {
+    const SESSION_KEYS: [&str; 2] = ["session_id", "thread-id"];
+    if let Ok(JsonValue::Object(fields)) = serde_json::from_str::<JsonValue>(payload) {
+        return SESSION_KEYS
+            .iter()
+            .find_map(|key| fields.get(*key).and_then(JsonValue::as_str))
+            .map(str::to_string);
+    }
+    SESSION_KEYS
+        .iter()
+        .find_map(|key| string_field_prefix(payload, key))
+}
+
+fn string_field_prefix(payload: &str, key: &str) -> Option<String> {
+    let after_key = &payload[payload.find(&format!("\"{key}\""))? + key.len() + 2..];
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    let value = after_colon.strip_prefix('"')?;
+    Some(value[..value.find('"')?].to_string())
 }
 
 fn trailing_argument(args: &[String], option: &str) -> Option<String> {
@@ -624,6 +659,16 @@ fn pip_command(source: &str, event: &str) -> Result<Vec<String>, String> {
     ])
 }
 
+const STATE_HOOKS: [(&str, Option<&str>, &str); 7] = [
+    ("UserPromptSubmit", None, "thinking"),
+    ("PermissionRequest", None, "attention"),
+    ("PostToolUse", None, "thinking"),
+    ("PreCompact", None, "thinking"),
+    ("PostCompact", Some("manual"), "idle"),
+    ("PostCompact", Some("auto"), "thinking"),
+    ("SessionEnd", None, "idle"),
+];
+
 fn configure_codex() -> Result<(), String> {
     let config = home_dir().join(".codex/config.toml");
     let existing = fs::read_to_string(&config).unwrap_or_default();
@@ -661,23 +706,26 @@ fn configure_codex() -> Result<(), String> {
         document["notify"] = Item::Value(Value::Array(array));
     }
 
-    add_codex_hook(
-        &mut document,
-        "UserPromptSubmit",
-        shell_command(&pip_command("codex", "thinking")?),
-    )?;
-    add_codex_hook(
-        &mut document,
-        "PermissionRequest",
-        shell_command(&pip_command("codex", "attention")?),
-    )?;
+    for (event, matcher, state) in STATE_HOOKS {
+        add_codex_hook(
+            &mut document,
+            event,
+            matcher,
+            shell_command(&pip_command("codex", state)?),
+        )?;
+    }
 
     backup_then_write(&config, &existing, &document.to_string())?;
     println!("Connected Codex to Pip-chan. Open `/hooks` in Codex to review and trust the Pip-chan hooks.");
     Ok(())
 }
 
-fn add_codex_hook(document: &mut DocumentMut, event: &str, command: String) -> Result<(), String> {
+fn add_codex_hook(
+    document: &mut DocumentMut,
+    event: &str,
+    matcher: Option<&str>,
+    command: String,
+) -> Result<(), String> {
     if !document.contains_key("hooks") {
         document["hooks"] = Item::Table(Table::new());
     }
@@ -691,6 +739,13 @@ fn add_codex_hook(document: &mut DocumentMut, event: &str, command: String) -> R
         .as_array_of_tables_mut()
         .ok_or_else(|| format!("Codex config `hooks.{event}` must be an array of tables."))?;
     for entry in entries.iter_mut() {
+        let entry_matcher = entry
+            .get("matcher")
+            .and_then(Item::as_value)
+            .and_then(Value::as_str);
+        if entry_matcher != matcher {
+            continue;
+        }
         let Some(commands) = entry
             .get_mut("hooks")
             .and_then(Item::as_array_of_tables_mut)
@@ -718,6 +773,9 @@ fn add_codex_hook(document: &mut DocumentMut, event: &str, command: String) -> R
     hook_entries.push(hook);
 
     let mut entry = Table::new();
+    if let Some(matcher) = matcher {
+        entry["matcher"] = value(matcher);
+    }
     entry["hooks"] = Item::ArrayOfTables(hook_entries);
     entries.push(entry);
     Ok(())
@@ -737,23 +795,25 @@ fn configure_claude() -> Result<(), String> {
         .as_object_mut()
         .ok_or("Claude settings `hooks` must be a JSON object.")?;
 
-    add_claude_hook(
-        hooks,
-        "UserPromptSubmit",
-        None,
-        shell_command(&pip_command("claude", "thinking")?),
-    );
+    for (event, matcher, state) in STATE_HOOKS {
+        add_claude_hook(
+            hooks,
+            event,
+            matcher,
+            shell_command(&pip_command("claude", state)?),
+        );
+    }
     add_claude_hook(
         hooks,
         "Stop",
         None,
         shell_command(&pip_command("claude", "ready")?),
     );
-    add_claude_hook(
+    remove_claude_hook(
         hooks,
         "Notification",
         Some("permission_prompt"),
-        shell_command(&pip_command("claude", "attention")?),
+        &shell_command(&pip_command("claude", "attention")?),
     );
 
     let next = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())? + "\n";
@@ -808,6 +868,35 @@ fn add_claude_hook(
         ]),
     );
     entries.push(JsonValue::Object(entry));
+}
+
+fn remove_claude_hook(
+    hooks: &mut Map<String, JsonValue>,
+    event: &str,
+    matcher: Option<&str>,
+    command: &str,
+) {
+    let Some(entries) = hooks.get_mut(event).and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    for entry in entries.iter_mut() {
+        if entry.get("matcher").and_then(JsonValue::as_str) != matcher {
+            continue;
+        }
+        if let Some(commands) = entry.get_mut("hooks").and_then(JsonValue::as_array_mut) {
+            commands
+                .retain(|hook| hook.get("command").and_then(JsonValue::as_str) != Some(command));
+        }
+    }
+    entries.retain(|entry| {
+        entry
+            .get("hooks")
+            .and_then(JsonValue::as_array)
+            .is_none_or(|commands| !commands.is_empty())
+    });
+    if entries.is_empty() {
+        hooks.remove(event);
+    }
 }
 
 fn shell_command(arguments: &[String]) -> String {
@@ -886,8 +975,8 @@ mod tests {
         let mut document = "".parse::<DocumentMut>().unwrap();
         let command = "'pip-chan' 'signal' '--event' 'thinking'".to_string();
 
-        add_codex_hook(&mut document, "UserPromptSubmit", command.clone()).unwrap();
-        add_codex_hook(&mut document, "UserPromptSubmit", command).unwrap();
+        add_codex_hook(&mut document, "UserPromptSubmit", None, command.clone()).unwrap();
+        add_codex_hook(&mut document, "UserPromptSubmit", None, command).unwrap();
 
         let entries = document["hooks"]["UserPromptSubmit"]
             .as_array_of_tables()
@@ -902,14 +991,86 @@ mod tests {
     }
 
     #[test]
+    fn codex_hooks_are_kept_apart_by_matcher() {
+        let mut document = "".parse::<DocumentMut>().unwrap();
+        let idle = "'pip-chan' 'signal' '--event' 'idle'".to_string();
+        let thinking = "'pip-chan' 'signal' '--event' 'thinking'".to_string();
+
+        add_codex_hook(&mut document, "PostCompact", Some("manual"), idle.clone()).unwrap();
+        add_codex_hook(&mut document, "PostCompact", Some("auto"), thinking).unwrap();
+        add_codex_hook(&mut document, "PostCompact", Some("manual"), idle).unwrap();
+
+        let entries = document["hooks"]["PostCompact"]
+            .as_array_of_tables()
+            .unwrap();
+        let matchers = entries
+            .iter()
+            .map(|entry| entry["matcher"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(matchers, ["manual", "auto"]);
+    }
+
+    #[test]
+    fn claude_hook_removal_keeps_other_hooks() {
+        let mut hooks = json!({
+            "Notification": [
+                {
+                    "matcher": "permission_prompt",
+                    "hooks": [
+                        { "type": "command", "command": "pip" },
+                        { "type": "command", "command": "other" }
+                    ]
+                },
+                { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "pip" }] }
+            ],
+            "Stop": [{ "hooks": [{ "type": "command", "command": "pip" }] }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        remove_claude_hook(&mut hooks, "Notification", Some("permission_prompt"), "pip");
+        assert_eq!(
+            hooks["Notification"],
+            json!([
+                { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "other" }] },
+                { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "pip" }] }
+            ])
+        );
+
+        remove_claude_hook(&mut hooks, "Stop", None, "pip");
+        assert!(!hooks.contains_key("Stop"));
+    }
+
+    #[test]
+    fn sessions_come_from_hook_and_notify_payloads() {
+        assert_eq!(
+            session_from_payload(r#"{"session_id":"abc","hook_event_name":"Stop"}"#),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            session_from_payload(r#"{"type":"agent-turn-complete","thread-id":"thr"}"#),
+            Some("thr".to_string())
+        );
+        assert_eq!(
+            session_from_payload(r#"{"session_id": "abc", "tool_response": "trunc"#),
+            Some("abc".to_string())
+        );
+        assert_eq!(session_from_payload(""), None);
+        assert_eq!(session_from_payload(r#"{"session_id":7}"#), None);
+    }
+
+    #[test]
     fn only_ready_codex_payloads_are_forwarded() {
         let ready = PipEvent {
             source: "codex".to_string(),
             event: "ready".to_string(),
+            session: None,
         };
         let thinking = PipEvent {
             source: "codex".to_string(),
             event: "thinking".to_string(),
+            session: None,
         };
 
         assert!(should_forward_previous_codex_notify(&ready, "{}"));

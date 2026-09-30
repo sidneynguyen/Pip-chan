@@ -49,7 +49,18 @@ src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan confi
 src-tauri/target/release/bundle/macos/Pip-chan.app/Contents/MacOS/pip-chan configure claude
 ```
 
-Codex uses `UserPromptSubmit` and `PermissionRequest` hooks for thinking and approval events. It uses its user-level `notify` setting for ready events when a turn completes. Pip-chan forwards a pre-existing notify command after sending its own event. After configuration, open `/hooks` in Codex and trust the Pip-chan hooks. Claude Code gets a `UserPromptSubmit` hook for thinking events, a `Stop` hook for ready events, and a `Notification` hook for delayed permission requests.
+Both CLIs get the same state hooks:
+
+| Hook | Pip-chan state |
+|---|---|
+| `UserPromptSubmit`, `PostToolUse`, `PreCompact` | thinking |
+| `PostCompact` with the `auto` matcher | thinking |
+| `PermissionRequest` | waiting for approval |
+| `PostCompact` with the `manual` matcher, `SessionEnd` | idle |
+
+Claude Code also gets a `Stop` hook for ready events. Codex uses its user-level `notify` setting for ready events when a turn completes. Pip-chan forwards a pre-existing notify command after sending its own event. After configuration, open `/hooks` in Codex and trust the Pip-chan hooks.
+
+Pip-chan tracks each session separately by the `session_id` in the hook input. She shows the thinking state while any session works. A ready bubble stays until its own session starts again, or for 10 seconds.
 
 ## Build and install on macOS
 
