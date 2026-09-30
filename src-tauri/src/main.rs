@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use chrono::{Local, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use std::{
@@ -16,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    menu::{MenuBuilder, MenuItem, MenuItemBuilder},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder},
     tray::TrayIconBuilder,
     Emitter, LogicalSize, Manager, PhysicalPosition, WindowEvent,
 };
@@ -31,6 +32,9 @@ const DEFAULT_SIZE_PERCENT: u32 = 130;
 const MIN_SIZE_PERCENT: u32 = 50;
 const MAX_SIZE_PERCENT: u32 = 200;
 const SIZE_STEP_PERCENT: u32 = 10;
+const WATER_REMINDER_TIMES: [(u32, u32); 2] = [(11, 0), (14, 0)];
+const WATER_REMINDER_MESSAGE: &str = "Baka! Drink some water!";
+const WATER_REMINDER_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct PipEvent {
@@ -53,9 +57,12 @@ struct PipState {
     initial_event: Mutex<Option<PipEvent>>,
     ghost_mode: Mutex<bool>,
     size_percent: Mutex<u32>,
+    water_reminder: Mutex<bool>,
 }
 
 struct VisibilityMenuItem(MenuItem<tauri::Wry>);
+
+struct WaterReminderMenuItem(CheckMenuItem<tauri::Wry>);
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Integrations {
@@ -113,6 +120,7 @@ fn run_app(startup_event: Option<PipEvent>) {
             initial_event: Mutex::new(startup_event.clone()),
             ghost_mode: Mutex::new(false),
             size_percent: Mutex::new(load_size_percent()),
+            water_reminder: Mutex::new(load_water_reminder()),
         })
         .plugin(tauri_plugin_single_instance::init(
             move |app, args, _cwd| {
@@ -134,6 +142,7 @@ fn run_app(startup_event: Option<PipEvent>) {
                 Some(ensure_remote_token().map_err(tauri::Error::Io)?),
             )?;
             install_tray(app)?;
+            start_water_reminder(app.handle().clone());
 
             if let Some(event) = startup_event.as_ref() {
                 emit_event(app.handle(), event.clone());
@@ -223,6 +232,10 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let size_decrease = MenuItemBuilder::with_id("size_decrease", "Decrease size").build(app)?;
     let size_reset = MenuItemBuilder::with_id("size_reset", "Reset size").build(app)?;
     let reset = MenuItemBuilder::with_id("reset", "Reset position").build(app)?;
+    let water_reminder =
+        CheckMenuItemBuilder::with_id("water_reminder", "Water reminders at 11 AM and 2 PM")
+            .checked(water_reminder_enabled(app.handle()))
+            .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Pip-chan").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[
@@ -232,10 +245,12 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
             &size_decrease,
             &size_reset,
             &reset,
+            &water_reminder,
             &quit,
         ])
         .build()?;
     app.manage(VisibilityMenuItem(visibility));
+    app.manage(WaterReminderMenuItem(water_reminder));
     let app_handle = app.handle().clone();
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
@@ -260,6 +275,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                 current_size_percent(&app_handle).saturating_sub(SIZE_STEP_PERCENT),
             ),
             "size_reset" => set_size_percent(&app_handle, DEFAULT_SIZE_PERCENT),
+            "water_reminder" => toggle_water_reminder(&app_handle),
             "quit" => app_handle.exit(0),
             _ => {}
         })
@@ -369,6 +385,57 @@ fn toggle_ghost_mode(app: tauri::AppHandle) {
         Err(_) => return,
     };
     let _ = app.emit("pip:ghost", enabled);
+}
+
+fn water_reminder_enabled(app: &tauri::AppHandle) -> bool {
+    app.state::<PipState>()
+        .water_reminder
+        .lock()
+        .map(|enabled| *enabled)
+        .unwrap_or(true)
+}
+
+fn toggle_water_reminder(app: &tauri::AppHandle) {
+    let state = app.state::<PipState>();
+    let enabled = match state.water_reminder.lock() {
+        Ok(mut enabled) => {
+            *enabled = !*enabled;
+            *enabled
+        }
+        Err(_) => return,
+    };
+    save_water_reminder(enabled);
+    if let Some(item) = app.try_state::<WaterReminderMenuItem>() {
+        let _ = item.0.set_checked(enabled);
+    }
+}
+
+fn start_water_reminder(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        let mut last_reminder_minute = None;
+        loop {
+            let now = Local::now().naive_local();
+            if let Some(minute) = due_water_reminder_minute(now, last_reminder_minute) {
+                last_reminder_minute = Some(minute);
+                let window_visible = app
+                    .get_webview_window("main")
+                    .is_some_and(|window| window.is_visible().unwrap_or(false));
+                if water_reminder_enabled(&app) && window_visible {
+                    let _ = app.emit("pip:reminder", WATER_REMINDER_MESSAGE);
+                }
+            }
+            thread::sleep(WATER_REMINDER_CHECK_INTERVAL);
+        }
+    });
+}
+
+fn due_water_reminder_minute(
+    now: NaiveDateTime,
+    last_reminder_minute: Option<NaiveDateTime>,
+) -> Option<NaiveDateTime> {
+    let minute = now.with_second(0)?.with_nanosecond(0)?;
+    let is_reminder_time = WATER_REMINDER_TIMES.contains(&(minute.hour(), minute.minute()));
+    (is_reminder_time && last_reminder_minute != Some(minute)).then_some(minute)
 }
 
 fn start_socket_server(
@@ -597,6 +664,26 @@ fn load_size_percent() -> u32 {
 fn save_size_percent(percent: u32) {
     let _ = fs::create_dir_all(pip_dir());
     let _ = fs::write(size_path(), json!({ "percent": percent }).to_string());
+}
+
+fn water_reminder_path() -> PathBuf {
+    pip_dir().join("water-reminder.json")
+}
+
+fn load_water_reminder() -> bool {
+    fs::read_to_string(water_reminder_path())
+        .ok()
+        .and_then(|contents| serde_json::from_str::<JsonValue>(&contents).ok())
+        .and_then(|reminder| reminder.get("enabled").and_then(JsonValue::as_bool))
+        .unwrap_or(true)
+}
+
+fn save_water_reminder(enabled: bool) {
+    let _ = fs::create_dir_all(pip_dir());
+    let _ = fs::write(
+        water_reminder_path(),
+        json!({ "enabled": enabled }).to_string(),
+    );
 }
 
 fn save_position(window: &tauri::Window) {
@@ -1083,6 +1170,32 @@ mod tests {
         assert!(tokens_match("secret", "secret"));
         assert!(!tokens_match("secret", "other!"));
         assert!(!tokens_match("secret", "short"));
+    }
+
+    #[test]
+    fn water_reminders_are_due_once_during_each_reminder_minute() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let at = |hour, minute, second| today.and_hms_opt(hour, minute, second).unwrap();
+        let yesterday_at_two = today.pred_opt().unwrap().and_hms_opt(14, 0, 0).unwrap();
+
+        assert_eq!(
+            due_water_reminder_minute(at(11, 0, 0), None),
+            Some(at(11, 0, 0))
+        );
+        assert_eq!(
+            due_water_reminder_minute(at(14, 0, 59), Some(at(11, 0, 0))),
+            Some(at(14, 0, 0))
+        );
+        assert_eq!(
+            due_water_reminder_minute(at(14, 0, 30), Some(yesterday_at_two)),
+            Some(at(14, 0, 0))
+        );
+        assert_eq!(
+            due_water_reminder_minute(at(14, 0, 30), Some(at(14, 0, 0))),
+            None
+        );
+        assert_eq!(due_water_reminder_minute(at(13, 59, 59), None), None);
+        assert_eq!(due_water_reminder_minute(at(14, 1, 0), None), None);
     }
 
     #[test]

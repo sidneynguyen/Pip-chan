@@ -42,6 +42,8 @@ let thinkingImageIndex = 0;
 let currentStatus: PipStatus = "idle";
 const busySessions = new Set<string>();
 let bubbleSession: string | undefined;
+let queuedReadySession: string | undefined;
+const REMINDER_SESSION = "reminder";
 
 function setGhostMode(enabled: boolean) {
   pip.classList.toggle("is-ghost", enabled);
@@ -62,6 +64,7 @@ function showEvent(event: PipEvent) {
   }
 
   if (event.event === "thinking" || event.event === "idle") {
+    if (queuedReadySession === session) queuedReadySession = undefined;
     if (bubbleSession === session) {
       hideBubble();
     } else if (bubbleSession === undefined) {
@@ -70,13 +73,26 @@ function showEvent(event: PipEvent) {
     return;
   }
 
-  showBubble(session);
+  if (bubbleSession === REMINDER_SESSION) {
+    queuedReadySession = session;
+    return;
+  }
+  showReadyBubble(session);
 }
 
-function showBubble(session: string) {
+function showReadyBubble(session: string) {
+  showBubble(session, "Baka! I'm waiting...", 10_000);
+}
+
+function showReminder(message: string) {
+  showBubble(REMINDER_SESSION, message);
+}
+
+function showBubble(session: string, message: string, hideAfterMs?: number) {
   window.clearTimeout(timeout);
+  timeout = undefined;
   bubbleSession = session;
-  copy.textContent = "Baka! I'm waiting...";
+  copy.textContent = message;
 
   setStatus("ready");
   bubble.hidden = false;
@@ -84,7 +100,9 @@ function showBubble(session: string) {
   void bubble.offsetWidth;
   bubble.classList.add("arriving");
 
-  timeout = window.setTimeout(hideBubble, 10_000);
+  if (hideAfterMs !== undefined) {
+    timeout = window.setTimeout(hideBubble, hideAfterMs);
+  }
 }
 
 function hideBubble() {
@@ -92,6 +110,13 @@ function hideBubble() {
   timeout = undefined;
   bubbleSession = undefined;
   bubble.hidden = true;
+
+  if (queuedReadySession !== undefined) {
+    const session = queuedReadySession;
+    queuedReadySession = undefined;
+    showReadyBubble(session);
+    return;
+  }
   showAgentActivity();
 }
 
@@ -156,5 +181,6 @@ pip.addEventListener("pointerdown", async (event) => {
 setStatus("idle");
 void listen<boolean>("pip:ghost", ({ payload }) => setGhostMode(payload));
 void listen<PipEvent>("pip:event", ({ payload }) => showEvent(payload));
+void listen<string>("pip:reminder", ({ payload }) => showReminder(payload));
 void invoke<boolean>("ghost_mode").then(setGhostMode);
 void invoke<PipEvent | null>("initial_event").then((event) => event && showEvent(event));
