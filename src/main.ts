@@ -11,6 +11,12 @@ type PipEvent = {
 
 type PipStatus = "idle" | "thinking" | "ready";
 
+type PendingReminder = {
+  kind: "water" | "eyes" | string;
+  message: string;
+  time: string;
+};
+
 const pip = document.querySelector<HTMLElement>("#pip")!;
 const image = document.querySelector<HTMLImageElement>("#pip-image")!;
 const bubble = document.querySelector<HTMLElement>("#bubble")!;
@@ -43,16 +49,23 @@ let currentStatus: PipStatus = "idle";
 const busySessions = new Set<string>();
 let bubbleSession: string | undefined;
 let queuedReadySession: string | undefined;
-const REMINDER_SESSION = "reminder";
+let pendingReminders: PendingReminder[] = [];
+let shownReminder: PendingReminder | undefined;
+let ghostModeEnabled = false;
 
 function setGhostMode(enabled: boolean) {
-  pip.classList.toggle("is-ghost", enabled);
+  ghostModeEnabled = enabled;
+  updateGhostAppearance();
   ghostToggle.textContent = enabled ? "Solid" : "Fade";
   ghostToggle.setAttribute("aria-pressed", String(enabled));
   ghostToggle.setAttribute(
     "aria-label",
     enabled ? "Use full opacity" : "Use ghost mode",
   );
+}
+
+function updateGhostAppearance() {
+  pip.classList.toggle("is-ghost", ghostModeEnabled && shownReminder === undefined);
 }
 
 function showEvent(event: PipEvent) {
@@ -65,6 +78,7 @@ function showEvent(event: PipEvent) {
 
   if (event.event === "thinking" || event.event === "idle") {
     if (queuedReadySession === session) queuedReadySession = undefined;
+    if (shownReminder !== undefined) return;
     if (bubbleSession === session) {
       hideBubble();
     } else if (bubbleSession === undefined) {
@@ -73,7 +87,7 @@ function showEvent(event: PipEvent) {
     return;
   }
 
-  if (bubbleSession === REMINDER_SESSION) {
+  if (shownReminder !== undefined) {
     queuedReadySession = session;
     return;
   }
@@ -81,17 +95,45 @@ function showEvent(event: PipEvent) {
 }
 
 function showReadyBubble(session: string) {
-  showBubble(session, "Baka! I'm waiting...", 10_000);
+  bubbleSession = session;
+  showBubble("Baka! I'm waiting...", 10_000);
 }
 
-function showReminder(message: string) {
-  showBubble(REMINDER_SESSION, message);
+function setPendingReminders(reminders: PendingReminder[]) {
+  pendingReminders = reminders;
+  if (shownReminder !== undefined) {
+    const shownKind = shownReminder.kind;
+    const stillPending = reminders.find((reminder) => reminder.kind === shownKind);
+    if (stillPending !== undefined) {
+      shownReminder = stillPending;
+    } else {
+      hideBubble();
+    }
+    return;
+  }
+  if (reminders[0] !== undefined) showReminder(reminders[0]);
 }
 
-function showBubble(session: string, message: string, hideAfterMs?: number) {
+function showReminder(reminder: PendingReminder) {
+  if (bubbleSession !== undefined) queuedReadySession = bubbleSession;
+  bubbleSession = undefined;
+  shownReminder = reminder;
+  updateGhostAppearance();
+  showBubble(reminder.message);
+}
+
+function dismissBubble() {
+  if (shownReminder !== undefined) {
+    const { kind, time } = shownReminder;
+    pendingReminders = pendingReminders.filter((reminder) => reminder.kind !== kind);
+    void invoke("dismiss_reminder", { kind, time });
+  }
+  hideBubble();
+}
+
+function showBubble(message: string, hideAfterMs?: number) {
   window.clearTimeout(timeout);
   timeout = undefined;
-  bubbleSession = session;
   copy.textContent = message;
 
   setStatus("ready");
@@ -109,8 +151,15 @@ function hideBubble() {
   window.clearTimeout(timeout);
   timeout = undefined;
   bubbleSession = undefined;
+  shownReminder = undefined;
+  updateGhostAppearance();
   bubble.hidden = true;
 
+  const nextReminder = pendingReminders[0];
+  if (nextReminder !== undefined) {
+    showReminder(nextReminder);
+    return;
+  }
   if (queuedReadySession !== undefined) {
     const session = queuedReadySession;
     queuedReadySession = undefined;
@@ -174,13 +223,16 @@ pip.addEventListener("pointermove", enableHoverControls);
 
 pip.addEventListener("pointerdown", async (event) => {
   if ((event.target as HTMLElement).closest("button")) return;
-  if (currentStatus === "ready") hideBubble();
+  if (currentStatus === "ready") dismissBubble();
   await getCurrentWindow().startDragging();
 });
 
 setStatus("idle");
 void listen<boolean>("pip:ghost", ({ payload }) => setGhostMode(payload));
 void listen<PipEvent>("pip:event", ({ payload }) => showEvent(payload));
-void listen<string>("pip:reminder", ({ payload }) => showReminder(payload));
+void listen<PendingReminder[]>("pip:reminders", ({ payload }) => setPendingReminders(payload));
 void invoke<boolean>("ghost_mode").then(setGhostMode);
-void invoke<PipEvent | null>("initial_event").then((event) => event && showEvent(event));
+void invoke<PipEvent | null>("initial_event")
+  .then((event) => event && showEvent(event))
+  .then(() => invoke<PendingReminder[]>("pending_reminders"))
+  .then(setPendingReminders);

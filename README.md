@@ -13,11 +13,11 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - A tray command toggles 20% ghost mode across all agent states.
 - Hover controls provide quick ghost-mode and hide actions.
 - Tray commands show or hide the overlay and change its size.
-- Daily water reminders appear at 11 AM and 2 PM while the overlay is visible. Each reminder stays until you click Pip-chan. A tray item turns it on or off.
+- Water reminders appear at 11 AM and 2 PM. Eye rest reminders appear every hour at :55. If Pip-chan starts or the Mac wakes late, a water reminder still appears for 2 hours and an eye rest reminder for 15 minutes. Each reminder stays until you click Pip-chan, and the dismissal is saved. In ghost mode, Pip-chan is solid while a reminder shows. A hidden overlay does not open for a reminder. A tray item turns each kind on or off.
 - `configure codex` installs user-level Codex hooks and a `notify` command.
 - `configure claude` merges Claude state hooks into global settings.
 - Config files are backed up as `*.pip-chan.bak` before their first change.
-- Pip-chan stores its window position and size, the water reminder setting, a remote authentication token, and an existing Codex notify command that it forwards. It does not retain prompts, code, or terminal output.
+- Pip-chan stores its window position and size, the reminder settings, a remote authentication token, and an existing Codex notify command that it forwards. It does not retain prompts, code, or terminal output.
 
 ## Development
 
