@@ -259,6 +259,7 @@ fn run_app(startup_event: Option<PipEvent>) {
     app.run(|app, event| {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
+            set_ghost_mode(app, false);
             show_window(app);
         }
     });
@@ -471,14 +472,15 @@ fn resize_window_keeping_feet_in_place(
 
 #[tauri::command]
 fn toggle_ghost_mode(app: tauri::AppHandle) {
+    set_ghost_mode(&app, !ghost_mode(app.state::<PipState>()));
+}
+
+fn set_ghost_mode(app: &tauri::AppHandle, enabled: bool) {
     let state = app.state::<PipState>();
-    let enabled = match state.ghost_mode.lock() {
-        Ok(mut enabled) => {
-            *enabled = !*enabled;
-            *enabled
-        }
-        Err(_) => return,
+    let Ok(mut ghost_mode) = state.ghost_mode.lock() else {
+        return;
     };
+    *ghost_mode = enabled;
     let _ = app.emit("pip:ghost", enabled);
 }
 

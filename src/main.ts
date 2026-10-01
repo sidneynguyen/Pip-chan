@@ -52,6 +52,7 @@ let queuedReadySession: string | undefined;
 let pendingReminders: PendingReminder[] = [];
 let shownReminder: PendingReminder | undefined;
 let ghostModeEnabled = false;
+let clickThrough = false;
 
 function setGhostMode(enabled: boolean) {
   ghostModeEnabled = enabled;
@@ -65,7 +66,19 @@ function setGhostMode(enabled: boolean) {
 }
 
 function updateGhostAppearance() {
-  pip.classList.toggle("is-ghost", ghostModeEnabled && shownReminder === undefined);
+  const faded = ghostModeEnabled && shownReminder === undefined;
+  pip.classList.toggle("is-ghost", faded);
+  if (faded !== clickThrough) {
+    clickThrough = faded;
+    if (faded) resetHoverControls();
+    void getCurrentWindow().setIgnoreCursorEvents(faded);
+  }
+}
+
+function resetHoverControls() {
+  (document.activeElement as HTMLElement | null)?.blur();
+  pip.classList.remove("has-pointer-activity");
+  pip.addEventListener("pointermove", enableHoverControls);
 }
 
 function showEvent(event: PipEvent) {
@@ -210,6 +223,7 @@ ghostToggle.addEventListener("pointerdown", (event) => {
 
 hidePip.addEventListener("pointerdown", (event) => {
   event.stopPropagation();
+  resetHoverControls();
   void invoke("hide_window");
 });
 

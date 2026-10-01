@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Permissions for Pip-chan's overlay window.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:window:allow-set-position"]}}
+{"default":{"identifier":"default","description":"Permissions for Pip-chan's overlay window.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:window:allow-set-position","core:window:allow-set-ignore-cursor-events"]}}
