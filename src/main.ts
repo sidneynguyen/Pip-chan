@@ -66,7 +66,7 @@ function setGhostMode(enabled: boolean) {
 }
 
 function updateGhostAppearance() {
-  const faded = ghostModeEnabled && shownReminder === undefined;
+  const faded = ghostModeEnabled && shownReminder === undefined && bubbleSession === undefined;
   pip.classList.toggle("is-ghost", faded);
   if (faded !== clickThrough) {
     clickThrough = faded;
@@ -109,6 +109,7 @@ function showEvent(event: PipEvent) {
 
 function showReadyBubble(session: string) {
   bubbleSession = session;
+  updateGhostAppearance();
   showBubble("Baka! I'm waiting...", 10_000);
 }
 

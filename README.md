@@ -10,7 +10,7 @@ Pip-chan is a small, draggable desktop companion for Codex CLI and Claude Code C
 - One token-protected remote socket at `~/.pip-chan/remote.sock` for SSH forwarding.
 - A singleton app: repeated `signal` invocations reach the running overlay.
 - Signal commands exit immediately when the overlay is closed. Hooks never launch the GUI.
-- A tray command toggles 20% ghost mode across all agent states. In ghost mode, clicks go through Pip-chan to the window behind her. Click Pip-chan in the Dock to make her solid again.
+- A tray command toggles 20% ghost mode across all agent states. In ghost mode, clicks go through Pip-chan to the window behind her. She is solid and clickable while a ready bubble shows, and she fades again when it closes. Click Pip-chan in the Dock to make her solid again.
 - Hover controls provide quick ghost-mode and hide actions.
 - Tray commands show or hide the overlay and change its size.
 - Water reminders appear at 11 AM and 2 PM. Eye rest reminders appear every hour at :55. If Pip-chan starts or the Mac wakes late, a water reminder still appears for 2 hours and an eye rest reminder for 15 minutes. Each reminder stays until you click Pip-chan, and the dismissal is saved. In ghost mode, Pip-chan is solid while a reminder shows. A hidden overlay does not open for a reminder. A tray item turns each kind on or off.
