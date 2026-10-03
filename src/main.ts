@@ -229,7 +229,7 @@ hidePip.addEventListener("pointerdown", (event) => {
 });
 
 function enableHoverControls(event: PointerEvent) {
-  if (event.movementX === 0 && event.movementY === 0) return;
+  if (clickThrough || (event.movementX === 0 && event.movementY === 0)) return;
   pip.classList.add("has-pointer-activity");
   pip.removeEventListener("pointermove", enableHoverControls);
 }

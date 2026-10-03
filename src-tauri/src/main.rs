@@ -33,7 +33,8 @@ const DEFAULT_SIZE_PERCENT: u32 = 130;
 const MIN_SIZE_PERCENT: u32 = 50;
 const MAX_SIZE_PERCENT: u32 = 200;
 const SIZE_STEP_PERCENT: u32 = 10;
-const WATER_REMINDER_TIMES: [(u32, u32); 2] = [(11, 0), (14, 0)];
+const WATER_REMINDER_INTERVAL_HOURS: u32 = 2;
+const WATER_REMINDER_MINUTE: u32 = 25;
 const EYE_REMINDER_MINUTE: u32 = 55;
 const REMINDER_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -88,7 +89,7 @@ impl Reminder {
 
     fn menu_label(self) -> &'static str {
         match self {
-            Reminder::Water => "Water reminders at 11 AM and 2 PM",
+            Reminder::Water => "Water reminders every 2 hours at :25",
             Reminder::Eyes => "Eye rest reminders every hour at :55",
         }
     }
@@ -102,7 +103,7 @@ impl Reminder {
 
     fn max_age(self) -> TimeDelta {
         match self {
-            Reminder::Water => TimeDelta::hours(2),
+            Reminder::Water => TimeDelta::minutes(30),
             Reminder::Eyes => TimeDelta::minutes(15),
         }
     }
@@ -110,17 +111,13 @@ impl Reminder {
     fn latest_time(self, now: NaiveDateTime) -> Option<NaiveDateTime> {
         match self {
             Reminder::Water => {
-                let today = now.date();
-                [today.pred_opt(), Some(today)]
-                    .into_iter()
-                    .flatten()
-                    .flat_map(|date| {
-                        WATER_REMINDER_TIMES
-                            .into_iter()
-                            .filter_map(move |(hour, minute)| date.and_hms_opt(hour, minute, 0))
-                    })
-                    .filter(|time| *time <= now)
-                    .max()
+                let even_hour = now.hour() - now.hour() % WATER_REMINDER_INTERVAL_HOURS;
+                let this_slot = now.date().and_hms_opt(even_hour, WATER_REMINDER_MINUTE, 0)?;
+                Some(if this_slot <= now {
+                    this_slot
+                } else {
+                    this_slot - TimeDelta::hours(WATER_REMINDER_INTERVAL_HOURS.into())
+                })
             }
             Reminder::Eyes => {
                 let this_hour = now.date().and_hms_opt(now.hour(), EYE_REMINDER_MINUTE, 0)?;
@@ -1355,8 +1352,12 @@ mod tests {
     #[test]
     fn reminders_are_pending_after_a_late_start() {
         assert_eq!(
+            due(at(10, 30), &settings(&[], &[]), &[]),
+            [("water", at(10, 25))]
+        );
+        assert_eq!(
             due(at(11, 5), &settings(&[], &[]), &[]),
-            [("eyes", at(10, 55)), ("water", at(11, 0))]
+            [("eyes", at(10, 55))]
         );
         assert_eq!(
             due(day(30, 0, 5), &settings(&[], &[]), &[]),
@@ -1369,8 +1370,8 @@ mod tests {
         let water_only = settings(&["eyes"], &[]);
         let eyes_only = settings(&["water"], &[]);
 
-        assert_eq!(due(at(12, 59), &water_only, &[]), [("water", at(11, 0))]);
-        assert_eq!(due(at(13, 0), &water_only, &[]), []);
+        assert_eq!(due(at(10, 54), &water_only, &[]), [("water", at(10, 25))]);
+        assert_eq!(due(at(10, 55), &water_only, &[]), []);
         assert_eq!(due(at(10, 9), &eyes_only, &[]), [("eyes", at(9, 55))]);
         assert_eq!(due(at(10, 10), &eyes_only, &[]), []);
     }
@@ -1392,10 +1393,10 @@ mod tests {
 
     #[test]
     fn dismissed_reminders_return_at_their_next_time() {
-        let dismissed = settings(&["eyes"], &[("water", at(11, 0))]);
+        let dismissed = settings(&["eyes"], &[("water", at(10, 25))]);
 
-        assert_eq!(due(at(11, 5), &dismissed, &[]), []);
-        assert_eq!(due(at(14, 0), &dismissed, &[]), [("water", at(14, 0))]);
+        assert_eq!(due(at(12, 24), &dismissed, &[]), []);
+        assert_eq!(due(at(12, 25), &dismissed, &[]), [("water", at(12, 25))]);
     }
 
     #[test]
