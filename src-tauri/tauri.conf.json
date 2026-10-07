@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "Pip-chan",
-        "width": 312,
-        "height": 440,
+        "width": 264,
+        "height": 368,
         "transparent": true,
         "decorations": false,
         "shadow": false,
